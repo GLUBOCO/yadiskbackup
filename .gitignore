@@ -1,0 +1,15 @@
+# Конфиденциальные данные
+config.json
+
+# Логи работы программы
+*.log
+YaDiskBackup_v2_3_14.log
+
+# Временные файлы компиляции Python
+__pycache__/
+*.pyc
+
+# Временные папки сборщика EXE (PyInstaller)
+build/
+dist/
+*.spec
