@@ -37,14 +37,14 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Build app bundle
-        run: |
-          python -m PyInstaller \\
-            --noconfirm \\
-            --clean \\
-            --windowed \\
-            --name YaDiskBackup \\
-            --osx-bundle-identifier ru.glubo.yadiskbackup \\
-            YaDiskBackup_v2_3_15.py
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --windowed
+          --name YaDiskBackup
+          --osx-bundle-identifier ru.glubo.yadiskbackup
+          YaDiskBackup_v2_3_15.py
           test -d dist/YaDiskBackup.app
           ditto -c -k --sequesterRsrc --keepParent dist/YaDiskBackup.app YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.15.zip
 
