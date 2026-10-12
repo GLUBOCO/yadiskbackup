@@ -4,9 +4,9 @@
 
 Разработано командой маркетингового агентства [Gluboco](https://glubo.ru).
 
-## 💾 Скачать готовую программу (для Windows)
+## 💾 Скачать готовую программу (для Windows и Mac)
 Если вам нужен готовый рабочий файл, который запускается в один клик без установки Python, скачайте его в разделе релизов:
-👉 **[Скачать YaDiskBackup.exe](https://github.com/GLUBOCO/yadiskbackup/releases)**
+👉 **[Скачать YaDiskBackup](https://github.com/GLUBOCO/yadiskbackup/releases)**
 
 ---
 
