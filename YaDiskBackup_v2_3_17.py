@@ -1821,13 +1821,30 @@ class YandexDownloaderApp:
                         # A user-requested stop is also a finished partial run:
                         # show its snapshot/results instead of leaving the user on
                         # a frozen progress screen.
-                        self.root.after(180, lambda: self.show_step("results"))
+                        self.root.after(180, self._show_results_after_finish)
         except queue.Empty:
             pass
         if self.is_downloading and time.time() - self._last_metrics_update >= 1.0:
             self._last_metrics_update = time.time()
             self._update_progress_ui()
         self.root.after(100, self._poll_log_queue)
+
+    def _show_results_after_finish(self):
+        """Show the results screen after stop/completion and restore its footer navigation."""
+        # The worker may still be unwinding when the finished event is handled.
+        if self.is_downloading:
+            self.root.after(100, self._show_results_after_finish)
+            return
+        self.show_step("results")
+        # Keep the bottom navigation available even if another completion path
+        # hid the reset button while the download screen was active.
+        try:
+            if not self.reset_session_btn.winfo_manager():
+                self.reset_session_btn.pack(side="left", padx=(10, 0))
+            self.reset_session_btn.configure(state="normal")
+            self.root.update_idletasks()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _append_log(self, message):
         stamp = time.strftime("%H:%M:%S")
