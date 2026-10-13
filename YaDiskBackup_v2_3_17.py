@@ -271,6 +271,14 @@ class YandexDownloaderApp:
         bottom.grid(row=3, column=0, sticky="ew")
         self.bottom_left = tk.Frame(bottom, bg=COLORS["surface"])
         self.bottom_left.pack(side="left", padx=18, pady=8)
+        # The results-screen restart action is a direct child of the footer.
+        # It must not depend on bottom_left's pack layout, which can collapse
+        # when the wizard navigation controls are hidden.
+        self.results_restart_btn = ttk.Button(
+            bottom, text="↻  Начать заново", style="Secondary.TButton",
+            command=self.reset_session
+        )
+        self._add_tooltip(self.results_restart_btn, "Начать новый проход, сохранив ссылки, Cookie и настройки")
         self.back_btn = ttk.Button(self.bottom_left, text="←  Назад", style="Secondary.TButton", command=self.go_back)
         self.reset_session_btn = ttk.Button(self.bottom_left, text="↻  Начать заново", style="Secondary.TButton", command=self.reset_session)
         self._add_tooltip(self.reset_session_btn, "Сбросить текущую сессию и указать новые ссылки")
@@ -955,6 +963,7 @@ class YandexDownloaderApp:
 
         self.back_btn.pack_forget()
         self.reset_session_btn.pack_forget()
+        self.results_restart_btn.pack_forget()
         self.next_btn.pack_forget()
         self.save_btn.pack_forget()
         self.footer_status.pack_forget()
@@ -992,7 +1001,7 @@ class YandexDownloaderApp:
             # save-folder/options (step 3); Continue from that page returns here.
             self.back_btn.configure(text="←  Назад", command=self.go_back, state="normal")
             self.back_btn.pack(side="left")
-            self.reset_session_btn.pack(side="left", padx=(10, 0))
+            self.results_restart_btn.pack(side="left", padx=(10, 0), before=self.footer_status)
         else:
             self.reset_session_btn.pack(side="left")
             # Download controls live on the download page; no wizard navigation here.
@@ -1839,9 +1848,9 @@ class YandexDownloaderApp:
         # Keep the bottom navigation available even if another completion path
         # hid the reset button while the download screen was active.
         try:
-            if not self.reset_session_btn.winfo_manager():
-                self.reset_session_btn.pack(side="left", padx=(10, 0))
-            self.reset_session_btn.configure(state="normal")
+            if not self.results_restart_btn.winfo_manager():
+                self.results_restart_btn.pack(side="left", padx=(10, 0), before=self.footer_status)
+            self.results_restart_btn.configure(state="normal")
             self.root.update_idletasks()
         except (tk.TclError, AttributeError):
             pass
@@ -1892,10 +1901,9 @@ class YandexDownloaderApp:
             self.overall_progress["value"] = done_pct
             self.overall_percent_var.set(f"{done_pct:.0f}%")
             self.overall_count_var.set("Нет задач для скачивания" if self.total_files == 0 else f"Обработано: {self.processed_files} из {self.total_files} задач")
-            # Byte progress is scoped to this run's scheduled work only. Files
-            # already present locally are excluded when tasks are assembled, so
-            # the full remote catalogue size must not be used as the denominator.
-            target_bytes = max(0, int(getattr(self, "progress_total_bytes", 0) or 0))
+            # Checked progress is measured against the entire remote catalogue,
+            # not only tasks that require downloading. Downloaded bytes stay separate.
+            target_bytes = max(0, int(getattr(self, "catalog_bytes", 0) or 0))
             completed_expected = max(0, int(getattr(self, "progress_done_expected_bytes", 0) or 0))
             current_expected = max(0, int(getattr(self, "current_file_size", 0) or 0))
             current_live = max(0, int(getattr(self, "current_file_bytes", 0) or 0))
@@ -1903,6 +1911,7 @@ class YandexDownloaderApp:
             progress_bytes_done = min(target_bytes, completed_expected + current_live)
             actual_downloaded = max(0, int(self.downloaded_bytes_run))
             self.overall_bytes_var.set(f"Скачано: {self._human_size(actual_downloaded)}")
+            self.overall_checked_var.set(f"Проверено: {self._human_size(progress_bytes_done)} из {self._human_size(target_bytes)}")
             now = time.time()
             paused = self.paused_total_seconds
             if self.is_paused and self.pause_started_at:
@@ -1913,22 +1922,10 @@ class YandexDownloaderApp:
             transfer_seconds = max(0.0, self.transfer_seconds_run)
             speed_bps = actual_downloaded / transfer_seconds if transfer_seconds > 0 else 0.0
             self.speed_var.set(f"{self._human_size(speed_bps * 3600)}/ч" if speed_bps > 0 else "рассчитывается…")
-            remaining_bytes = max(0, target_bytes - progress_bytes_done)
-            # ETA uses wall-clock elapsed time (including server waits) rather than
-            # transfer-only time, so it estimates how long the computer must stay on.
-            effective_bps = actual_downloaded / elapsed if elapsed > 0 else 0.0
             remaining_tasks = max(0, self.total_files - self.processed_files)
-            if remaining_tasks == 0:
-                eta = 0
-            elif effective_bps > 0:
-                eta = remaining_bytes / effective_bps
-                average_task = elapsed / max(1, self.processed_files)
-                eta = max(eta, remaining_tasks * average_task * 0.25)
-            elif self.processed_files > 0:
-                eta = remaining_tasks * (elapsed / self.processed_files)
-            else:
-                eta = 0
-            self.eta_var.set(self._format_eta(int(eta)) if eta > 0 else ("завершение…" if remaining_tasks == 0 else "рассчитывается…"))
+            # Predict remaining time by task count, independent of network speed.
+            eta = remaining_tasks * 20
+            self.eta_var.set(self._format_eta(int(eta)) if eta > 0 else "завершение…")
             self.side_download_count_var.set("Все файлы уже обработаны" if self.total_files == 0 else f"{self.processed_files} из {self.total_files} задач ({done_pct:.0f}%)")
 
     def _format_eta(self, seconds):
@@ -2008,6 +2005,7 @@ class YandexDownloaderApp:
         self.overall_percent_var = tk.StringVar(value="0%")
         tk.Label(overall_row, textvariable=self.overall_percent_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"), width=6).pack(side="left", padx=(8, 0))
         self.overall_count_var = tk.StringVar(value="0 файлов")
+        self.overall_checked_var = tk.StringVar(value="Проверено: 0 Б из 0 Б")
         self.overall_bytes_var = tk.StringVar(value="0 Б")
         self.speed_var = tk.StringVar(value="—")
         self.elapsed_var = tk.StringVar(value="—")
@@ -2020,11 +2018,16 @@ class YandexDownloaderApp:
         stats_bottom.pack(fill="x", anchor="w", pady=(4, 0))
         count_label = tk.Label(stats_top, textvariable=self.overall_count_var, bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9))
         count_label.pack(side="left")
-        tk.Label(stats_top, text=" · Получено: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
+        tk.Label(stats_top, text=" · ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
         bytes_label = tk.Label(stats_top, textvariable=self.overall_bytes_var, bg=COLORS["surface"], fg=COLORS["green"], font=(FONT, 9, "bold"))
         bytes_label.pack(side="left")
+        stats_checked = tk.Frame(stats, bg=COLORS["surface"])
+        stats_checked.pack(fill="x", anchor="w", pady=(4, 0))
+        checked_label = tk.Label(stats_checked, textvariable=self.overall_checked_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"))
+        checked_label.pack(side="left")
         self._add_tooltip(count_label, "Количество задач обработки в текущем запуске. Это не всегда равно числу уникальных файлов: дополнительная проверка оригиналов у превью добавляет отдельные задачи.")
-        self._add_tooltip(bytes_label, "Слева — фактически полученные байты за текущий запуск, справа — общий размер файлов по данным Яндекс.Диска. При повторных попытках полученный объём может быть больше ожидаемого.")
+        self._add_tooltip(bytes_label, "Фактический объём данных, скачанный за текущий запуск.")
+        self._add_tooltip(checked_label, "Объём проверенных данных относительно общего размера файлов в текущем каталоге Яндекс Диска. Это не объём скачивания.")
         elapsed_label = tk.Label(stats_top, textvariable=self.elapsed_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"))
         tk.Label(stats_top, text=" · Прошло: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
         elapsed_label.pack(side="left")
@@ -2437,7 +2440,8 @@ class YandexDownloaderApp:
         self.overall_progress["value"] = 0
         self.overall_percent_var.set("0%")
         self.overall_count_var.set("Подготовка списка файлов…")
-        self.overall_bytes_var.set("Объём станет известен после подготовки списка")
+        self.overall_bytes_var.set("Скачано: 0 Б")
+        self.overall_checked_var.set("Проверено: 0 Б из 0 Б")
         self.elapsed_var.set("0 сек.")
         self.speed_var.set("рассчитывается…")
         self.eta_var.set("рассчитывается…")
