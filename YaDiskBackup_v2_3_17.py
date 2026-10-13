@@ -576,11 +576,11 @@ class YandexDownloaderApp:
         main = content
         card = self._card(main)
         card.pack(fill="x", pady=(0, 10))
-        self._section_heading(card, "Шаг 3. Выберите папку и запустите скачивание", "Укажите, куда сохранить файлы, и проверьте настройки перед запуском.")
+        self._section_heading(card, "Шаг 3. Выберите папку и запустите скачивание", "Файлы с Яндекс Диска будут сохранены прямо в выбранную папку, без дополнительной папки с названием источника.")
         path_row = tk.Frame(card, bg=COLORS["surface"])
         path_row.pack(fill="x", padx=16, pady=(0, 14))
         path_row.grid_columnconfigure(0, weight=1)
-        tk.Label(path_row, text="Папка для сохранения", bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 5), columnspan=2)
+        tk.Label(path_row, text="Куда сохранить файлы (содержимое попадёт прямо сюда)", bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 5), columnspan=2)
         self.path_var = tk.StringVar(value=str(Path.home() / "Downloads" / "Яндекс.Диск"))
         self.path_entry = ttk.Entry(path_row, textvariable=self.path_var, font=(MONO, 9))
         self.path_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
@@ -1891,20 +1891,18 @@ class YandexDownloaderApp:
         if hasattr(self, "overall_progress"):
             self.overall_progress["value"] = done_pct
             self.overall_percent_var.set(f"{done_pct:.0f}%")
-            if self.total_files == 0:
-                self.overall_count_var.set("Нет задач для скачивания")
-            else:
-                self.overall_count_var.set(
-                    f"Обработано: {self.processed_files} из {self.total_files} задач"
-                )
-            batch_total_bytes = max(0, int(getattr(self, "progress_total_bytes", 0) or 0))
-            checked_bytes = max(0, int(getattr(self, "progress_done_expected_bytes", 0) or 0))
-            checked_bytes = min(batch_total_bytes, checked_bytes)
-            self.checked_bytes_var.set(
-                f"{self._human_size(checked_bytes)} из {self._human_size(batch_total_bytes)}"
-            )
+            self.overall_count_var.set("Нет задач для скачивания" if self.total_files == 0 else f"Обработано: {self.processed_files} из {self.total_files} задач")
+            # Byte progress is scoped to this run's scheduled work only. Files
+            # already present locally are excluded when tasks are assembled, so
+            # the full remote catalogue size must not be used as the denominator.
+            target_bytes = max(0, int(getattr(self, "progress_total_bytes", 0) or 0))
+            completed_expected = max(0, int(getattr(self, "progress_done_expected_bytes", 0) or 0))
+            current_expected = max(0, int(getattr(self, "current_file_size", 0) or 0))
+            current_live = max(0, int(getattr(self, "current_file_bytes", 0) or 0))
+            current_live = min(current_live, current_expected) if current_expected else current_live
+            progress_bytes_done = min(target_bytes, completed_expected + current_live)
             actual_downloaded = max(0, int(self.downloaded_bytes_run))
-            self.overall_bytes_var.set(self._human_size(actual_downloaded))
+            self.overall_bytes_var.set(f"Скачано: {self._human_size(actual_downloaded)}")
             now = time.time()
             paused = self.paused_total_seconds
             if self.is_paused and self.pause_started_at:
@@ -1912,16 +1910,24 @@ class YandexDownloaderApp:
             elapsed = max(0, int(round(now - (self.download_started_at or now) - paused)))
             if elapsed >= 1:
                 self.elapsed_var.set(self._format_eta(elapsed).replace("около ", ""))
-            # Use elapsed wall time (excluding manual pauses), not the tiny
-            # accumulated time spent inside network reads. This avoids absurd
-            # speed values when a small chunk arrives quickly after a long wait.
-            speed_bps = actual_downloaded / elapsed if elapsed > 0 else 0.0
+            transfer_seconds = max(0.0, self.transfer_seconds_run)
+            speed_bps = actual_downloaded / transfer_seconds if transfer_seconds > 0 else 0.0
             self.speed_var.set(f"{self._human_size(speed_bps * 3600)}/ч" if speed_bps > 0 else "рассчитывается…")
-            # Stable, deliberately simple ETA: about 20 seconds per unfinished
-            # task. Byte throughput is unreliable while Yandex is listing files
-            # or responding slowly, and should not make the ETA jump wildly.
+            remaining_bytes = max(0, target_bytes - progress_bytes_done)
+            # ETA uses wall-clock elapsed time (including server waits) rather than
+            # transfer-only time, so it estimates how long the computer must stay on.
+            effective_bps = actual_downloaded / elapsed if elapsed > 0 else 0.0
             remaining_tasks = max(0, self.total_files - self.processed_files)
-            eta = remaining_tasks * 20
+            if remaining_tasks == 0:
+                eta = 0
+            elif effective_bps > 0:
+                eta = remaining_bytes / effective_bps
+                average_task = elapsed / max(1, self.processed_files)
+                eta = max(eta, remaining_tasks * average_task * 0.25)
+            elif self.processed_files > 0:
+                eta = remaining_tasks * (elapsed / self.processed_files)
+            else:
+                eta = 0
             self.eta_var.set(self._format_eta(int(eta)) if eta > 0 else ("завершение…" if remaining_tasks == 0 else "рассчитывается…"))
             self.side_download_count_var.set("Все файлы уже обработаны" if self.total_files == 0 else f"{self.processed_files} из {self.total_files} задач ({done_pct:.0f}%)")
 
@@ -2002,7 +2008,6 @@ class YandexDownloaderApp:
         self.overall_percent_var = tk.StringVar(value="0%")
         tk.Label(overall_row, textvariable=self.overall_percent_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"), width=6).pack(side="left", padx=(8, 0))
         self.overall_count_var = tk.StringVar(value="0 файлов")
-        self.checked_bytes_var = tk.StringVar(value="0 Б из 0 Б")
         self.overall_bytes_var = tk.StringVar(value="0 Б")
         self.speed_var = tk.StringVar(value="—")
         self.elapsed_var = tk.StringVar(value="—")
@@ -2015,15 +2020,11 @@ class YandexDownloaderApp:
         stats_bottom.pack(fill="x", anchor="w", pady=(4, 0))
         count_label = tk.Label(stats_top, textvariable=self.overall_count_var, bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9))
         count_label.pack(side="left")
-        tk.Label(stats_top, text=" · Проверено: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
-        checked_label = tk.Label(stats_top, textvariable=self.checked_bytes_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"))
-        checked_label.pack(side="left")
-        tk.Label(stats_top, text=" · Скачано: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
+        tk.Label(stats_top, text=" · Получено: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
         bytes_label = tk.Label(stats_top, textvariable=self.overall_bytes_var, bg=COLORS["surface"], fg=COLORS["green"], font=(FONT, 9, "bold"))
         bytes_label.pack(side="left")
-        self._add_tooltip(count_label, "Количество обработанных задач из общего числа задач в этом запуске.")
-        self._add_tooltip(checked_label, "Объём задач, обработанных в текущем батче, из общего ожидаемого объёма этого батча. Учитывается и обработка без скачивания.")
-        self._add_tooltip(bytes_label, "Фактически скачанный объём данных за текущий запуск. При повторных попытках объём может увеличиваться.")
+        self._add_tooltip(count_label, "Количество задач обработки в текущем запуске. Это не всегда равно числу уникальных файлов: дополнительная проверка оригиналов у превью добавляет отдельные задачи.")
+        self._add_tooltip(bytes_label, "Слева — фактически полученные байты за текущий запуск, справа — общий размер файлов по данным Яндекс.Диска. При повторных попытках полученный объём может быть больше ожидаемого.")
         elapsed_label = tk.Label(stats_top, textvariable=self.elapsed_var, bg=COLORS["surface"], fg=COLORS["text"], font=(FONT, 9, "bold"))
         tk.Label(stats_top, text=" · Прошло: ", bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9)).pack(side="left")
         elapsed_label.pack(side="left")
@@ -2108,7 +2109,7 @@ class YandexDownloaderApp:
         tk.Label(side, text="✓  Cookie указан", bg=COLORS["surface"], fg=COLORS["green"], font=(FONT, 9, "bold")).grid(row=2, column=0, sticky="w", padx=15, pady=(0, 14))
         tk.Label(side, text="3  Скачивание", bg=COLORS["surface"], fg=COLORS["accent"], font=(FONT, 10, "bold")).grid(row=3, column=0, sticky="w", padx=15, pady=(0, 4))
         tk.Label(side, textvariable=self.side_download_count_var, bg=COLORS["surface"], fg=COLORS["muted"], font=(FONT, 9), wraplength=190, justify="left").grid(row=4, column=0, sticky="w", padx=15, pady=(0, 15))
-        for row, title, var in [(5, "Скорость передачи", self.speed_var), (6, "Проверено / объём батча", self.checked_bytes_var), (7, "Примерное время до завершения", self.eta_var)]:
+        for row, title, var in [(5, "Скорость передачи", self.speed_var), (6, "Обработано / объём задач", self.overall_bytes_var), (7, "Примерное время до завершения", self.eta_var)]:
             box = tk.Frame(side, bg=COLORS["surface_alt"], padx=10, pady=8)
             box.grid(row=row, column=0, sticky="ew", padx=12, pady=(0, 6))
             tk.Label(box, text=title, bg=COLORS["surface_alt"], fg=COLORS["muted"], font=(FONT, 8)).pack(anchor="w")
@@ -2116,8 +2117,8 @@ class YandexDownloaderApp:
             metric_label.pack(anchor="w", pady=(2, 0))
             if var is self.speed_var:
                 self._add_tooltip(metric_label, "Скорость передачи: полученные байты, разделённые на время чтения данных из сетевого ответа. Ожидание между запросами и ручная пауза не учитываются.")
-            elif var is self.checked_bytes_var:
-                self._add_tooltip(metric_label, "Сколько байтовых данных обработано из общего объёма задач текущего батча, включая задачи без скачивания.")
+            elif var is self.overall_bytes_var:
+                self._add_tooltip(metric_label, "Фактически полученный объём за этот запуск и общий размер файлов по данным Яндекс.Диска.")
             elif var is self.eta_var:
                 self._add_tooltip(metric_label, "Прогноз оставшегося времени включает ожидания Яндекса и обновляется по ходу загрузки.")
         tip = tk.Frame(side, bg=COLORS["surface_alt"], padx=10, pady=10)
@@ -2383,6 +2384,21 @@ class YandexDownloaderApp:
         except OSError as exc:
             messagebox.showerror("Нет доступа к папке", f"Не удаётся записывать файлы в выбранную папку:\n{exc}", parent=self.root)
             return
+        # Make the final destination explicit before starting. Files from a single
+        # Yandex Disk link go directly into the selected folder; for multiple links,
+        # each source gets its own named subfolder to avoid filename collisions.
+        if len(urls) == 1:
+            destination_note = "Содержимое Яндекс Диска будет сохранено прямо в выбранную папку — без дополнительной папки с названием источника."
+        else:
+            destination_note = (f"Добавлено ссылок: {len(urls)}. Чтобы файлы из разных источников не перезаписывали друг друга, "
+                                "для каждой ссылки будет создана отдельная подпапка с названием папки на Яндекс Диске.")
+        if not messagebox.askyesno(
+            "Проверьте место сохранения",
+            f"Файлы будут сохранены сюда:\n\n{target_dir}\n\n{destination_note}\n\nПродолжить?",
+            parent=self.root,
+        ):
+            self.path_entry.focus_set()
+            return
         self.path_var.set(target_dir)
         if not self.save_settings(show_message=False):
             return
@@ -2421,8 +2437,7 @@ class YandexDownloaderApp:
         self.overall_progress["value"] = 0
         self.overall_percent_var.set("0%")
         self.overall_count_var.set("Подготовка списка файлов…")
-        self.checked_bytes_var.set("Объём станет известен после подготовки списка")
-        self.overall_bytes_var.set("0 Б")
+        self.overall_bytes_var.set("Объём станет известен после подготовки списка")
         self.elapsed_var.set("0 сек.")
         self.speed_var.set("рассчитывается…")
         self.eta_var.set("рассчитывается…")
@@ -2641,6 +2656,11 @@ class YandexDownloaderApp:
         try:
             os.makedirs(target_dir, exist_ok=True)
             self.target_dir_current = target_dir
+            self._log(f"Папка назначения: {target_dir}")
+            if len(urls) == 1:
+                self._log("Файлы будут сохраняться прямо в выбранную папку; дополнительная папка источника не создаётся.")
+            else:
+                self._log("Несколько ссылок: для каждой папки-источника будет создана отдельная подпапка, чтобы избежать перезаписи файлов с одинаковыми именами.")
             api_session = requests.Session()
             api_session.headers.update({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
@@ -2670,7 +2690,11 @@ class YandexDownloaderApp:
                             self._log(f"  [i] Не удалось получить название папки (HTTP {metadata_response.status_code}); использую название из ссылки.")
                     except Exception as metadata_exc:
                         self._log(f"  [i] Не удалось получить название папки ({metadata_exc}); использую название из ссылки.")
-                    local_path = os.path.join(target_dir, self.sanitize(folder_name))
+                    # Single-source downloads are written directly into the selected
+                    # destination. With multiple links, keep one folder per source to
+                    # prevent same-named files from different sources overwriting each other.
+                    local_path = (target_dir if len(urls) == 1
+                                  else os.path.join(target_dir, self.sanitize(folder_name)))
                     # Reports link to the containing folder in the user's Yandex Disk UI,
                     # not to a direct file/preview URL that may be unreadable or broken.
                     disk_folder_url = "https://disk.yandex.ru/client/disk/" + quote(folder_name, safe="")
