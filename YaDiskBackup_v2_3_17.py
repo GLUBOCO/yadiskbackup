@@ -2761,7 +2761,10 @@ class YandexDownloaderApp:
             # index once so already downloaded files can be recognized without opening or
             # hashing their contents (important for very large catalogs).
             local_index = self._build_local_file_index(target_dir)
+            migration_skip_paths = set()
             if resume_mode == "migrate_2314":
+                # Keep the COMPLETE cloud catalog for reporting/manifest; only exclude
+                # items before the inferred cursor from this run's download queue.
                 last_local_index = -1
                 last_local_rel = None
                 for cloud_index, cloud_item in enumerate(files):
@@ -2769,13 +2772,21 @@ class YandexDownloaderApp:
                         last_local_index = cloud_index
                         last_local_rel = cloud_item.get("rel", "")
                 if last_local_index >= 0:
-                    skipped_count = last_local_index + 1
-                    files = files[skipped_count:]
-                    self._log(f"Миграция с v 2.3.14: найден последний локальный файл «{last_local_rel}». Пропускаю первые {skipped_count} файлов по алфавитному обходу; продолжение со следующего.")
+                    migration_skip_paths = {
+                        item.get("rel", "") for item in files[:last_local_index + 1]
+                        if item.get("rel", "")
+                    }
+                    self._log(
+                        f"Миграция с v 2.3.14: найден последний локальный файл «{last_local_rel}». "
+                        f"Каталог проверен полностью: {len(files)} файлов в облаке. "
+                        f"В этом запуске пропускаю первые {len(migration_skip_paths)} файлов по "
+                        "алфавитному обходу и продолжаю со следующего."
+                    )
                 else:
-                    self._log("Миграция с v 2.3.14: локальные файлы источника не найдены. Начинаю с первого файла облака.")
-                self.catalog_files = files
-                self.catalog_bytes = sum(max(0, int(item.get("size", 0) or 0)) for item in files)
+                    self._log(
+                        f"Миграция с v 2.3.14: локальные файлы источника не найдены. "
+                        f"Проверено файлов в облаке: {len(files)}. Начинаю с первого файла."
+                    )
             self.current_catalog_delta = {"count": len(files), "size": self.catalog_bytes, "previous": self.previous_catalog_snapshot}
             # Persist the last successfully prepared Yandex catalog, so next run can
             # show whether new remote files appeared even when local downloads failed.
@@ -2813,7 +2824,14 @@ class YandexDownloaderApp:
                 item["state_before"] = state
                 item["actual_size"] = actual_size
                 by_rel[rel] = item
-                self.report_records.append({"path": rel, "state": state, "reason": saved.get("reason", ""), "size": expected, "actual_size": actual_size, "phase": "", "folder_url": item.get("folder_url", "")})
+                report_reason = saved.get("reason", "")
+                if resume_mode == "migrate_2314" and rel in migration_skip_paths and state not in ("original", "preview"):
+                    report_reason = "Пропущен до точки продолжения при миграции с v 2.3.14; файл не найден локально, можно скачать при обычном повторном запуске."
+                self.report_records.append({"path": rel, "state": state, "reason": report_reason, "size": expected, "actual_size": actual_size, "phase": "", "folder_url": item.get("folder_url", "")})
+                if resume_mode == "migrate_2314" and rel in migration_skip_paths:
+                    # Preserve the full report/catalog but do not retry pre-cursor items
+                    # during this migration run, even if an old download attempt failed.
+                    continue
                 if state == "preview":
                     if retry_previews or preview_only:
                         preview_items.append(item)
