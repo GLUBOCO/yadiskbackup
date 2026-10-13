@@ -271,14 +271,6 @@ class YandexDownloaderApp:
         bottom.grid(row=3, column=0, sticky="ew")
         self.bottom_left = tk.Frame(bottom, bg=COLORS["surface"])
         self.bottom_left.pack(side="left", padx=18, pady=8)
-        # The results-screen restart action is a direct child of the footer.
-        # It must not depend on bottom_left's pack layout, which can collapse
-        # when the wizard navigation controls are hidden.
-        self.results_restart_btn = ttk.Button(
-            bottom, text="↻  Начать заново", style="Secondary.TButton",
-            command=self.reset_session
-        )
-        self._add_tooltip(self.results_restart_btn, "Начать новый проход, сохранив ссылки, Cookie и настройки")
         self.back_btn = ttk.Button(self.bottom_left, text="←  Назад", style="Secondary.TButton", command=self.go_back)
         self.reset_session_btn = ttk.Button(self.bottom_left, text="↻  Начать заново", style="Secondary.TButton", command=self.reset_session)
         self._add_tooltip(self.reset_session_btn, "Сбросить текущую сессию и указать новые ссылки")
@@ -623,8 +615,11 @@ class YandexDownloaderApp:
             "Программа сразу перейдёт к оставшимся файлам. То, что скачано в прошлый раз, будет проверено вторым прогоном.")
         rb_start = add_mode("start", "Начать с начала",
             "Программа заново попробует найти и скачать те файлы, которые не удалось загрузить в прошлый раз (дольше).")
+        rb_migrate = add_mode("migrate_2314", "Продолжить после обновления с v 2.3.14",
+            "Для перехода со старой версии: найдёт последний сохранённый файл и продолжит со следующего. Старый манифест не используется.")
         self._add_tooltip(rb_resume, "Быстрый режим: пропущенные ранее файлы повторно проверяться не будут.")
         self._add_tooltip(rb_start, "Повторно проверяет файлы, которые не удалось загрузить в прошлый раз.")
+        self._add_tooltip(rb_migrate, "Миграция с v 2.3.14: ориентируется на существующие локальные файлы и алфавитный обход облака.")
         self.retry_preview_var = tk.BooleanVar(value=True)
         self.retry_preview_var.trace_add("write", lambda *_: self._update_step3_footer_action())
         preview_row = tk.Frame(mode_card, bg=COLORS["surface"])
@@ -963,7 +958,6 @@ class YandexDownloaderApp:
 
         self.back_btn.pack_forget()
         self.reset_session_btn.pack_forget()
-        self.results_restart_btn.pack_forget()
         self.next_btn.pack_forget()
         self.save_btn.pack_forget()
         self.footer_status.pack_forget()
@@ -1001,7 +995,7 @@ class YandexDownloaderApp:
             # save-folder/options (step 3); Continue from that page returns here.
             self.back_btn.configure(text="←  Назад", command=self.go_back, state="normal")
             self.back_btn.pack(side="left")
-            self.results_restart_btn.pack(side="left", padx=(10, 0), before=self.footer_status)
+            self.reset_session_btn.pack(side="left", padx=(10, 0))
         else:
             self.reset_session_btn.pack(side="left")
             # Download controls live on the download page; no wizard navigation here.
@@ -1445,9 +1439,19 @@ class YandexDownloaderApp:
             self._log(f"[!] Не удалось записать состояние файла в журнал: {exc}")
         self._save_manifest(force=False)
 
-    def _prepare_run_files(self, target_dir):
-        """Create unique per-run logs/reports and load persistent download state."""
+    def _prepare_run_files(self, target_dir, migration_mode=False):
+        """Create per-run reports and load or reset persistent download state."""
         self._load_manifest(target_dir)
+        if migration_mode:
+            # Migration from v2.3.14 must not use its manifest/journal as a resume cursor.
+            self.manifest = {"schema_version": 1, "updated_at": None, "files": {}}
+            self._manifest_dirty_count = 0
+            for state_file in (self.manifest_path, self.state_journal_path):
+                try:
+                    with open(state_file, "w", encoding="utf-8") as state_stream:
+                        state_stream.write("")
+                except OSError as exc:
+                    raise OSError(f"Не удалось сбросить старое состояние миграции ({state_file}): {exc}") from exc
         self.previous_run_summary = self.manifest.get("last_run_summary")
         self.previous_catalog_snapshot = self.manifest.get("last_catalog")
         self.current_catalog_delta = None
@@ -1848,9 +1852,9 @@ class YandexDownloaderApp:
         # Keep the bottom navigation available even if another completion path
         # hid the reset button while the download screen was active.
         try:
-            if not self.results_restart_btn.winfo_manager():
-                self.results_restart_btn.pack(side="left", padx=(10, 0), before=self.footer_status)
-            self.results_restart_btn.configure(state="normal")
+            if not self.reset_session_btn.winfo_manager():
+                self.reset_session_btn.pack(side="left", padx=(10, 0))
+            self.reset_session_btn.configure(state="normal")
             self.root.update_idletasks()
         except (tk.TclError, AttributeError):
             pass
@@ -2452,7 +2456,8 @@ class YandexDownloaderApp:
         self.retry_preview_final_btn.pack_forget()
         self._render_recent_files()
         try:
-            self._prepare_run_files(target_dir)
+            migration_mode = (self.resume_mode_var.get() == "migrate_2314") if hasattr(self, "resume_mode_var") else False
+            self._prepare_run_files(target_dir, migration_mode=migration_mode)
         except OSError as exc:
             messagebox.showerror("Ошибка записи журнала", f"Не удалось создать внутреннее состояние или журнал в выбранной папке:\n{exc}", parent=self.root)
             self.is_downloading = False
@@ -2599,10 +2604,44 @@ class YandexDownloaderApp:
             offset += len(batch)
         return items
 
+    @staticmethod
+    def _local_index_key(relative_path):
+        """Normalize relative paths so the local index also works on Windows."""
+        return os.path.normcase(os.path.normpath(str(relative_path))).replace("\\", "/").casefold()
+
+    def _build_local_file_index(self, target_dir):
+        """Index existing files by relative path and size without reading file contents."""
+        started = time.monotonic()
+        index = {}
+        target_abs = os.path.abspath(target_dir)
+        for root, dirs, names in os.walk(target_abs, topdown=True):
+            # These are application state and generated reports, not downloaded source files.
+            if os.path.abspath(root) == target_abs:
+                dirs[:] = [d for d in dirs if d not in (".yadiskbackup", "Журналы и отчёты")]
+            dirs.sort(key=str.casefold)
+            names.sort(key=str.casefold)
+            for name in names:
+                full_path = os.path.join(root, name)
+                try:
+                    if not os.path.isfile(full_path):
+                        continue
+                    rel = os.path.relpath(full_path, target_abs)
+                    index[self._local_index_key(rel)] = {
+                        "path": full_path,
+                        "size": os.path.getsize(full_path),
+                    }
+                except OSError:
+                    continue
+        elapsed = time.monotonic() - started
+        self._log(f"Локальный индекс: найдено {len(index)} файлов; построен за {elapsed:.1f} сек. (содержимое файлов не читалось).")
+        return index
+
     def _collect_files(self, api_session, public_key, api_path, local_path, target_dir, output, disk_folder_url=""):
         self._check_control()
         self._log(f"  [*] Чтение содержимого: {api_path}")
         items = self._fetch_items(api_session, public_key, api_path)
+        # Make traversal deterministic: folders and files are visited alphabetically.
+        items.sort(key=lambda entry: str(entry.get("name", "")).casefold())
         os.makedirs(local_path, exist_ok=True)
         for item in items:
             self._check_control()
@@ -2710,9 +2749,33 @@ class YandexDownloaderApp:
                     self._log(f"  [✖] Не удалось прочитать папку: {exc}")
                     self.run_errors.append({"path": folder_url, "reason": f"Не удалось прочитать папку: {exc}"})
 
+            # Standard modes retain their existing global path sort. Migration follows
+            # v2.3.14-style depth-first traversal, with each directory's entries sorted
+            # alphabetically in _collect_files().
+            if resume_mode != "migrate_2314":
+                files.sort(key=lambda item: str(item.get("rel", "")).casefold())
             self.catalog_files = files
             self.source_folder_links = {item.get("rel", ""): item.get("folder_url", "") for item in files if item.get("rel")}
             self.catalog_bytes = sum(max(0, int(item.get("size", 0) or 0)) for item in files)
+            # Legacy versions did not always create a manifest. Build a lightweight local
+            # index once so already downloaded files can be recognized without opening or
+            # hashing their contents (important for very large catalogs).
+            local_index = self._build_local_file_index(target_dir)
+            if resume_mode == "migrate_2314":
+                last_local_index = -1
+                last_local_rel = None
+                for cloud_index, cloud_item in enumerate(files):
+                    if self._local_index_key(cloud_item.get("rel", "")) in local_index:
+                        last_local_index = cloud_index
+                        last_local_rel = cloud_item.get("rel", "")
+                if last_local_index >= 0:
+                    skipped_count = last_local_index + 1
+                    files = files[skipped_count:]
+                    self._log(f"Миграция с v 2.3.14: найден последний локальный файл «{last_local_rel}». Пропускаю первые {skipped_count} файлов по алфавитному обходу; продолжение со следующего.")
+                else:
+                    self._log("Миграция с v 2.3.14: локальные файлы источника не найдены. Начинаю с первого файла облака.")
+                self.catalog_files = files
+                self.catalog_bytes = sum(max(0, int(item.get("size", 0) or 0)) for item in files)
             self.current_catalog_delta = {"count": len(files), "size": self.catalog_bytes, "previous": self.previous_catalog_snapshot}
             # Persist the last successfully prepared Yandex catalog, so next run can
             # show whether new remote files appeared even when local downloads failed.
@@ -2728,19 +2791,25 @@ class YandexDownloaderApp:
                 expected = max(0, int(item.get("size", 0) or 0))
                 saved = manifest_files.get(rel, {})
                 state = saved.get("state", "unprocessed")
-                actual_size = os.path.getsize(dest) if os.path.isfile(dest) else 0
-                if not os.path.isfile(dest):
+                local_record = local_index.get(self._local_index_key(rel))
+                local_exists = bool(local_record)
+                actual_size = int(local_record.get("size", 0) or 0) if local_record else 0
+                if not local_exists:
                     if state in ("original", "preview", "unknown"):
                         state = "failed" if saved.get("state") == "failed" else "unprocessed"
-                elif state not in ("original", "preview"):
-                    if expected > 0 and actual_size == expected:
-                        state = "original"
-                    elif expected > 0 and 0 < actual_size < expected:
+                elif expected > 0:
+                    # Re-check manifest classifications against current remote size.
+                    # This catches updated files whose size changed, even if an older
+                    # manifest previously marked the local copy as a completed original.
+                    if actual_size == expected:
+                        if state != "failed":
+                            state = "original"
+                    elif 0 < actual_size < expected:
                         state = "preview"
                     else:
                         state = "unknown"
-                if state == "original" and not os.path.isfile(dest):
-                    state = "unprocessed"
+                elif state not in ("original", "preview"):
+                    state = "unknown"
                 item["state_before"] = state
                 item["actual_size"] = actual_size
                 by_rel[rel] = item
@@ -2758,7 +2827,7 @@ class YandexDownloaderApp:
                     new_items.append(item)
 
             if not preview_only:
-                if resume_mode == "resume":
+                if resume_mode in ("resume", "migrate_2314"):
                     # Fast continuation deliberately skips files marked failed in a
                     # previous run; only unprocessed/new files are attempted.
                     main_tasks = [(item, "new") for item in new_items]
