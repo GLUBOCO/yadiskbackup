@@ -788,7 +788,10 @@ class YandexDownloaderApp:
         originals_total = max(0, int(total or 0))
         originals_count = max(0, int(counts.get("originals", 0) or 0))
         previews_total = max(0, originals_total - originals_count)
-        previous = getattr(self, "previous_run_summary", None) or {}
+        # A stopped run is a partial snapshot, not a comparable completed run.
+        # Avoid misleading negative deltas against a prior full run.
+        partial_stop = getattr(self, "status_result", "") == "Остановлено"
+        previous = (getattr(self, "previous_run_summary", None) or {}) if not partial_stop else {}
         previous_counts = previous.get("counts", {}) if isinstance(previous, dict) else {}
         previous_sizes = previous.get("sizes", {}) if isinstance(previous, dict) else {}
         for key in ("originals", "previews", "failed"):
@@ -825,7 +828,7 @@ class YandexDownloaderApp:
         self.results_total_var.set(f"Всего найдено файлов: {total:,}".replace(",", " ") +
                                    f"   •   Общий размер по данным Яндекс.Диска: {stats.get('size', '—')}")
         catalog_delta = getattr(self, "current_catalog_delta", None)
-        if catalog_delta and catalog_delta.get("previous"):
+        if not partial_stop and catalog_delta and catalog_delta.get("previous"):
             count_delta = int(catalog_delta.get("count", 0)) - int(catalog_delta["previous"].get("count", 0))
             size_delta = int(catalog_delta.get("size", 0)) - int(catalog_delta["previous"].get("size", 0))
             sign_count = "+" if count_delta > 0 else "−" if count_delta < 0 else "±"
@@ -1813,7 +1816,9 @@ class YandexDownloaderApp:
                     else:
                         self.retry_preview_final_btn.pack_forget()
                         self.retry_preview_help.pack_forget()
-                    self.reset_session_btn.pack_forget()
+                    # Keep the wizard footer's "Начать заново" action available
+                    # after a stop/completion; _show_results_after_finish also
+                    # restores it after switching to the results page.
                     if self.restart_requested:
                         self.restart_requested = False
                         self.root.after(300, self.start_download_thread)
@@ -1842,7 +1847,22 @@ class YandexDownloaderApp:
             if not self.reset_session_btn.winfo_manager():
                 self.reset_session_btn.pack(side="left", padx=(10, 0))
             self.reset_session_btn.configure(state="normal")
+            self.bottom_left.update_idletasks()
             self.root.update_idletasks()
+            # Reassert visibility after pending page/layout callbacks have run.
+            self.root.after_idle(self._ensure_results_restart_button)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _ensure_results_restart_button(self):
+        """Keep the bottom navigation action visible on the results screen."""
+        try:
+            if getattr(self, "current_page", None) != "results":
+                return
+            if not self.reset_session_btn.winfo_manager():
+                self.reset_session_btn.pack(side="left", padx=(10, 0))
+            self.reset_session_btn.configure(state="normal")
+            self.bottom_left.update_idletasks()
         except (tk.TclError, AttributeError):
             pass
 
@@ -2598,7 +2618,7 @@ class YandexDownloaderApp:
             else:
                 output.append({"name": name, "path": next_local, "rel": rel_path, "size": int(item.get("size") or 0), "file": item.get("file"), "preview": item.get("preview"), "folder_url": disk_folder_url})
 
-    def _update_final_stats_from_records(self, total=None):
+    def _update_final_stats_from_records(self, total=None, save_summary=True):
         """Refresh results counters for both completed and user-stopped runs."""
         records = list(getattr(self, "report_records", []) or [])
         originals = sum(1 for r in records if r.get("state") == "original")
@@ -2621,15 +2641,16 @@ class YandexDownloaderApp:
                        "unprocessed": unprocessed, "unknown": unknown},
             "sizes": sizes,
         }
-        # Keep this run's summary as the baseline for the next launch. It is a
-        # snapshot of outcomes, separate from the mutable per-file manifest.
-        self.manifest["last_run_summary"] = {
-            "counts": {"originals": originals, "previews": previews, "failed": failed},
-            "sizes": {key: int(sizes.get(key, 0) or 0) for key in ("originals", "previews", "failed")},
-            "total": total_count,
-            "catalog_size": int(getattr(self, "catalog_bytes", 0) or 0),
-            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        # Only a fully completed pass should become the comparison baseline.
+        # A stopped pass is partial and would make the next comparison misleading.
+        if save_summary:
+            self.manifest["last_run_summary"] = {
+                "counts": {"originals": originals, "previews": previews, "failed": failed},
+                "sizes": {key: int(sizes.get(key, 0) or 0) for key in ("originals", "previews", "failed")},
+                "total": total_count,
+                "catalog_size": int(getattr(self, "catalog_bytes", 0) or 0),
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
         self._save_manifest(force=True)
         try:
             self.root.after(0, self._refresh_results_screen)
@@ -2937,7 +2958,10 @@ class YandexDownloaderApp:
             self.status_result = "Остановлено" if not self.restart_requested else "Перезапуск…"
             self._log("[Ⅱ] Текущий проход остановлен.")
             self._save_manifest(force=True)
-            self._update_final_stats_from_records(total=len(getattr(self, "catalog_files", []) or self.report_records))
+            self._update_final_stats_from_records(
+                total=len(getattr(self, "catalog_files", []) or self.report_records),
+                save_summary=False,
+            )
             self._write_error_report()
             self._write_report(self.status_result)
             self.log_queue.put(("status", (self.status_result, False)))
