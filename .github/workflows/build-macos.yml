@@ -110,8 +110,10 @@ jobs:
       - name: Replace assets in existing release v2.3.17
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view v2.3.17
+
           gh release view v2.3.17 --json assets --jq '.assets[].name' |
           while IFS= read -r asset; do
             case "$asset" in
@@ -120,4 +122,5 @@ jobs:
                 ;;
             esac
           done
+
           gh release upload v2.3.17 release-assets/* --clobber
