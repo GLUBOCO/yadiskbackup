@@ -991,11 +991,15 @@ class YandexDownloaderApp:
                 self.launch_btn.configure(text="↓  Начать скачивание", command=self.start_download_thread, style="Primary.TButton")
                 self.launch_btn.pack(side="left", padx=(12, 0))
         elif step == "results":
-            # Results are the completed state of step 3. Back returns to
-            # save-folder/options (step 3); Continue from that page returns here.
+            # Results screen keeps the standard wizard footer actions visible.
+            # Do not pack relative to footer_status: it is intentionally hidden
+            # on this page, and Tk can raise TclError when used as `before=`.
             self.back_btn.configure(text="←  Назад", command=self.go_back, state="normal")
             self.back_btn.pack(side="left")
+            self.reset_session_btn.configure(text="↻  Начать заново", state="normal")
             self.reset_session_btn.pack(side="left", padx=(10, 0))
+            self.save_btn.configure(state="normal")
+            self.save_btn.pack(side="left", padx=(10, 0))
         else:
             self.reset_session_btn.pack(side="left")
             # Download controls live on the download page; no wizard navigation here.
