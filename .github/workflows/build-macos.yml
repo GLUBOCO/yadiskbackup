@@ -1,10 +1,10 @@
-name: Build YaDiskBackup for macOS
+name: Build YaDiskBackup for macOS and Windows
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'YaDiskBackup_v2_3_15.py'
+      - 'YaDiskBackup_v2_3_17.py'
       - 'requirements.txt'
       - '.github/workflows/build-macos.yml'
 
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-macos:
     name: Build macOS (${{ matrix.arch_name }})
     strategy:
       fail-fast: false
@@ -22,9 +22,7 @@ jobs:
             arch_name: Apple-Silicon-arm64
           - runner: macos-15-intel
             arch_name: Intel-x86_64
-
     runs-on: ${{ matrix.runner }}
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -36,9 +34,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Build app bundle
         shell: bash
@@ -49,18 +45,41 @@ jobs:
             --windowed \
             --name YaDiskBackup \
             --osx-bundle-identifier ru.glubo.yadiskbackup \
-            YaDiskBackup_v2_3_15.py
-
+            YaDiskBackup_v2_3_17.py
           test -d dist/YaDiskBackup.app
+          ditto -c -k --sequesterRsrc --keepParent dist/YaDiskBackup.app YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.17.zip
 
-          ditto -c -k --sequesterRsrc --keepParent \
-            dist/YaDiskBackup.app \
-            "YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.15.zip"
-
-      - name: Upload app artifact
+      - name: Upload macOS app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.15
-          path: YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.15.zip
+          name: YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.17
+          path: YaDiskBackup-macOS-${{ matrix.arch_name }}-v2.3.17.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Build EXE
+        run: python -m PyInstaller --noconfirm --clean --noconsole --onefile --name YaDiskBackup YaDiskBackup_v2_3_17.py
+
+      - name: Upload Windows EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YaDiskBackup-Windows-v2.3.17
+          path: dist/YaDiskBackup.exe
           if-no-files-found: error
           retention-days: 30
