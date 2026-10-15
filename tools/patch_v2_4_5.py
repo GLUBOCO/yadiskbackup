@@ -67,5 +67,9 @@ replace('        self.results_failed_btn = ttk.Button(preview_row, text="Неу�
 
 replace('            for recent_item in existing_for_recent[-6:]:\n                self.log_queue.put(("file_existing", recent_item))',
         '            for item in files:\n                rel = item.get("rel", "")\n                if rel in scheduled_paths or not os.path.isfile(item.get("path", "")):\n                    continue\n                local_state = self._classify_local_file(os.path.getsize(item["path"]), item.get("size", 0), item.get("state_before", ""))\n                if local_state == "original":\n                    self._log(f"[ИТОГ-ОРИГИНАЛ] Оригинал уже есть на диске: {rel}")\n                elif local_state == "preview":\n                    self._log(f"[ИТОГ-ПРЕВЬЮ] Оригинал пока не получен; локальное превью сохранено: {rel}")\n                else:\n                    self._log(f"[ИТОГ-ПРЕВЬЮ] Локальный файл сохранён, тип не удалось точно определить: {rel}")\n            for recent_item in existing_for_recent[-6:]:\n                self.log_queue.put(("file_existing", recent_item))', "log outcomes for skipped files");
+
+replace('                if preview_only:\n                    base = "Дополнительная проверка оригиналов у превью"\n                elif phase_name == "new":',
+        '                if retry_failed_only:\n                    base = "Повторная проверка неудавшихся файлов" if phase_name == "retry" else "Дополнительная проверка оригиналов у превью"\n                elif preview_only:\n                    base = "Дополнительная проверка оригиналов у превью"\n                elif phase_name == "new":', "retry phase wording");
+
 OUT.write_text(s, encoding="utf-8")
 print(f"Generated {OUT} ({len(s)} characters)")
