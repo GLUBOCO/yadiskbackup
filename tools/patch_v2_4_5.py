@@ -90,8 +90,8 @@ replace('            self._log(f"[СЕТЬ] Настройки сохранен�
         '            config.pop("download_original_timeout", None)\n            config.pop("download_preview_timeout", None)\n            with CONFIG_FILE.open("w", encoding="utf-8") as f:\n                json.dump(config, f, ensure_ascii=False, indent=2)\n            self._log(f"[СЕТЬ] Настройки сохранены: таймауты API={config[\'api_timeouts\']} сек.; скачивание файлов={config[\'download_timeout\']} сек.; паузы API={config[\'api_retry_pauses\']} сек.; паузы загрузки={config[\'download_retry_pauses\']} сек.")', "save unified timeout log");
 replace('        original_timeouts = self._parse_positive_int_list(network_cfg.get("download_original_timeout", "10"), [10], 1, 3600)\n        preview_timeouts = self._parse_positive_int_list(network_cfg.get("download_preview_timeout", "10"), [10], 1, 3600)',
         '        download_timeouts = self._parse_positive_int_list(network_cfg.get("download_timeout", "10,30,60"), [10, 30, 60], 1, 3600)\n        original_timeouts = download_timeouts\n        preview_timeouts = download_timeouts', "shared file timeouts");
-replace('                except (requests.Timeout, requests.ConnectionError) as exc:',
-        '                except requests.Timeout as exc:', "retry only timeouts");
+replace('                except (requests.Timeout, requests.ConnectionError) as exc:\n                    reason = f"{label}: {type(exc).__name__}: {exc}"',
+        '                except requests.Timeout as exc:\n                    reason = f"{label}: {type(exc).__name__}: {exc}"', "retry only timeouts");
 replace('                    retryable = isinstance(exc, (IOError, OSError, requests.RequestException))',
         '                    retryable = False', "do not retry generic errors");
 
