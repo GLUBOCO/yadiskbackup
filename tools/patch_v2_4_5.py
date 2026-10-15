@@ -71,5 +71,29 @@ replace('            for recent_item in existing_for_recent[-6:]:\n             
 replace('                if preview_only:\n                    base = "Дополнительная проверка оригиналов у превью"\n                elif phase_name == "new":',
         '                if retry_failed_only:\n                    base = "Повторная проверка неудавшихся файлов" if phase_name == "retry" else "Дополнительная проверка оригиналов у превью"\n                elif preview_only:\n                    base = "Дополнительная проверка оригиналов у превью"\n                elif phase_name == "new":', "retry phase wording");
 
+
+replace('"download_original_timeout": "10,30,60",\n        "download_preview_timeout": "10,30,60",',
+        '"download_timeout": "10,30,60",', "unify timeout defaults");
+replace('                for key in ("download_original_timeout", "download_preview_timeout"):\n                    values[key] = str(values[key])',
+        '                if "download_timeout" not in saved:\n                    old_original = str(saved.get("download_original_timeout", "10")).strip()\n                    old_preview = str(saved.get("download_preview_timeout", "10")).strip()\n                    legacy = old_original if old_original not in ("", "10") else old_preview\n                    values["download_timeout"] = legacy if legacy not in ("", "10") else "10,30,60"\n                values["download_timeout"] = str(values["download_timeout"])', "migrate timeout settings");
+replace('        original_var = tk.StringVar(value=str(current["download_original_timeout"]))\n        preview_var = tk.StringVar(value=str(current["download_preview_timeout"]))',
+        '        download_var = tk.StringVar(value=str(current["download_timeout"]))', "single timeout variable");
+replace('        field("Таймауты оригинала, секунд", original_var, "При таймауте: попытки с указанными пределами, например 10,30,60. HTTP 500 повторно не запрашивается.")\n        field("Таймауты превью, секунд", preview_var, "При таймауте: попытки с указанными пределами, например 10,30,60. HTTP 500 повторно не запрашивается.")',
+        '        field("Таймауты скачивания файлов, секунд", download_var, "Единая последовательность для оригиналов и превью, например 10,30,60. Повторяем таймауты и временные ошибки; HTTP 500 не повторяем.")', "single timeout field");
+replace('            original_var.set(str(self.NETWORK_DEFAULTS["download_original_timeout"]))\n            preview_var.set(str(self.NETWORK_DEFAULTS["download_preview_timeout"]))',
+        '            download_var.set(str(self.NETWORK_DEFAULTS["download_timeout"]))', "single timeout reset");
+replace('            original_timeouts = self._parse_positive_int_list(original_var.get(), [], 1, 3600)\n            preview_timeouts = self._parse_positive_int_list(preview_var.get(), [], 1, 3600)\n            if not original_timeouts or not preview_timeouts:\n                messagebox.showerror("Некорректные значения", "Таймауты оригинала и превью: укажите целые числа от 1 до 3600 через запятую.", parent=dialog)\n                return',
+        '            download_timeouts = self._parse_positive_int_list(download_var.get(), [], 1, 3600)\n            if not download_timeouts:\n                messagebox.showerror("Некорректные значения", "Таймауты скачивания: укажите целые числа от 1 до 3600 через запятую.", parent=dialog)\n                return', "validate unified timeout");
+replace('"download_original_timeout": ",".join(map(str, original_timeouts)),\n                "download_preview_timeout": ",".join(map(str, preview_timeouts)),',
+        '"download_timeout": ",".join(map(str, download_timeouts)),', "save unified timeout");
+replace('            self._log(f"[СЕТЬ] Настройки сохранены: таймауты API={config[\\'api_timeouts\\']} сек.; оригинал={config[\\'download_original_timeout\\']} сек.; превью={config[\\'download_preview_timeout\\']} сек.; паузы API={config[\\'api_retry_pauses\\']} сек.; паузы загрузки={config[\\'download_retry_pauses\\']} сек.")',
+        '            config.pop("download_original_timeout", None)\n            config.pop("download_preview_timeout", None)\n            with CONFIG_FILE.open("w", encoding="utf-8") as f:\n                json.dump(config, f, ensure_ascii=False, indent=2)\n            self._log(f"[СЕТЬ] Настройки сохранены: таймауты API={config[\\'api_timeouts\\']} сек.; скачивание файлов={config[\\'download_timeout\\']} сек.; паузы API={config[\\'api_retry_pauses\\']} сек.; паузы загрузки={config[\\'download_retry_pauses\\']} сек.")', "save unified timeout log");
+replace('        original_timeouts = self._parse_positive_int_list(network_cfg.get("download_original_timeout", "10"), [10], 1, 3600)\n        preview_timeouts = self._parse_positive_int_list(network_cfg.get("download_preview_timeout", "10"), [10], 1, 3600)',
+        '        download_timeouts = self._parse_positive_int_list(network_cfg.get("download_timeout", "10,30,60"), [10, 30, 60], 1, 3600)\n        original_timeouts = download_timeouts\n        preview_timeouts = download_timeouts', "shared file timeouts");
+replace('                except (requests.Timeout, requests.ConnectionError) as exc:',
+        '                except requests.Timeout as exc:', "retry only timeouts");
+replace('                    retryable = isinstance(exc, (IOError, OSError, requests.RequestException))',
+        '                    retryable = False', "do not retry generic errors");
+
 OUT.write_text(s, encoding="utf-8")
 print(f"Generated {OUT} ({len(s)} characters)")
