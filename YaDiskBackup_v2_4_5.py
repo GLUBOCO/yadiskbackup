@@ -17,10 +17,9 @@ from urllib.parse import unquote, urlparse
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import requests
-import keyring
 
 APP_NAME = "Яндекс.Диск — Загрузчик"
-APP_VERSION = "2.4.5"  # clearer file outcomes, bounded retries and secure Cookie storage
+APP_VERSION = "2.4.5"  # Cookie stored in config.json without encryption
 API_BASE = "https://cloud-api.yandex.net/v1/disk/public/resources"
 YANDEX_URL = "https://disk.yandex.ru/"
 COOKIE_EDITOR_URL = "https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm"
@@ -2623,21 +2622,11 @@ class YandexDownloaderApp:
                 line for line in urls_value.splitlines()
                 if line.strip().rstrip("/") != EXCLUDED_PERSONAL_URL.rstrip("/")
             )
-            config = {}
-            if CONFIG_FILE.exists():
-                with CONFIG_FILE.open("r", encoding="utf-8") as existing:
-                    config = json.load(existing)
-            cookie_value = self.cookies_text.get("1.0", "end-1c").strip()
-            if cookie_value:
-                keyring.set_password("ru.glubo.yadiskbackup", "cookie", cookie_value)
-            else:
-                try:
-                    keyring.delete_password("ru.glubo.yadiskbackup", "cookie")
-                except keyring.errors.PasswordDeleteError:
-                    pass
-            config.update({"urls": urls_value, "path": self.path_var.get()})
-            config.pop("cookies", None)
-            config.pop("cookie_encrypted", None)
+            config = {
+                "urls": urls_value,
+                "path": self.path_var.get(),
+                "cookies": self.cookies_text.get("1.0", "end-1c"),
+            }
             APP_DIR.mkdir(parents=True, exist_ok=True)
             tmp_path = CONFIG_FILE.with_suffix(".json.tmp")
             with tmp_path.open("w", encoding="utf-8") as f:
@@ -2793,19 +2782,10 @@ class YandexDownloaderApp:
                     saved_urls = ""
                 self.urls_text.insert("1.0", saved_urls)
                 self.path_var.set(config.get("path", str(Path.home() / "Downloads" / "Яндекс.Диск")))
-                saved_cookie = keyring.get_password("ru.glubo.yadiskbackup", "cookie") or ""
-                legacy_cookie = str(config.get("cookies", "") or "")
-                if not saved_cookie and legacy_cookie:
-                    # Move legacy plaintext Cookie to the OS credential store before deleting it.
-                    keyring.set_password("ru.glubo.yadiskbackup", "cookie", legacy_cookie)
-                    saved_cookie = legacy_cookie
-                    config.pop("cookies", None)
-                self.cookies_text.insert("1.0", saved_cookie)
-                cleaned_needed = saved_urls != config.get("urls", "") or "cookies" in config or "cookie_encrypted" in config
-                if cleaned_needed:
+                self.cookies_text.insert("1.0", config.get("cookies", ""))
+                # Persist the cleaned config so the private link does not return on next launch.
+                if saved_urls != config.get("urls", ""):
                     config["urls"] = saved_urls
-                    config.pop("cookies", None)
-                    config.pop("cookie_encrypted", None)
                     with CONFIG_FILE.open("w", encoding="utf-8") as cleaned:
                         json.dump(config, cleaned, ensure_ascii=False, indent=2)
                 self._log("Настройки загружены из config.json.")
@@ -2820,27 +2800,15 @@ class YandexDownloaderApp:
             line for line in urls_value.splitlines()
             if line.strip().rstrip("/") != EXCLUDED_PERSONAL_URL.rstrip("/")
         )
-        config = {}
+        config = {
+            "urls": urls_value,
+            "path": self.path_var.get(),
+            "cookies": self.cookies_text.get("1.0", "end-1c"),
+        }
         try:
-            if CONFIG_FILE.exists():
-                with CONFIG_FILE.open("r", encoding="utf-8") as existing:
-                    config = json.load(existing)
-        except Exception:
-            config = {}
-        try:
-            cookie_value = self.cookies_text.get("1.0", "end-1c").strip()
-            if cookie_value:
-                keyring.set_password("ru.glubo.yadiskbackup", "cookie", cookie_value)
-            else:
-                try:
-                    keyring.delete_password("ru.glubo.yadiskbackup", "cookie")
-                except keyring.errors.PasswordDeleteError:
-                    pass
-            config.update({"urls": urls_value, "path": self.path_var.get()})
-            config.pop("cookies", None)
-            config.pop("cookie_encrypted", None)
             APP_DIR.mkdir(parents=True, exist_ok=True)
-            DownloadStorage.write_json_atomic(CONFIG_FILE, config, indent=2)
+            with CONFIG_FILE.open("w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
             self._log(f"Настройки сохранены локально: {CONFIG_FILE}")
             if show_message:
                 messagebox.showinfo("Настройки сохранены", "Настройки сохранены на этом компьютере. Cookie хранится в config.json без шифрования: не передавайте этот файл другим людям.", parent=self.root)
