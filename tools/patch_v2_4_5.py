@@ -95,5 +95,11 @@ replace('                except (requests.Timeout, requests.ConnectionError) as 
 replace('                    retryable = isinstance(exc, (IOError, OSError, requests.RequestException))',
         '                    retryable = False', "do not retry generic errors");
 
+
+replace('        transient_codes = {408, 425, 429, 502, 503, 504}',
+        '        transient_codes = {429, 502, 503, 504}', "retry only server overload codes");
+replace('if response.status_code not in (408, 425, 429, 502, 503, 504):',
+        'if response.status_code not in (429, 502, 503, 504):', "API retry only server overload codes");
+
 OUT.write_text(s, encoding="utf-8")
 print(f"Generated {OUT} ({len(s)} characters)")
